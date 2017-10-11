@@ -1,12 +1,12 @@
 from __future__ import unicode_literals
 
-import re
-import datetime
-import os.path
-import json
 import argparse
-import subprocess
+import datetime
+import json
+import os.path
+import re
 import shutil
+import subprocess
 import tempfile
 import time
 
@@ -85,7 +85,7 @@ class CondaS3Sync(object):
             raise ValueError('Invalid environment file, must have YAML '
                              'extension')
 
-        existing_path = self._get_env_path_for_name(env_name) 
+        existing_path = self._get_env_path_for_name(env_name)
         if not existing_path and not base_path:
             # Figure out the path later
             env_path = None
@@ -154,13 +154,14 @@ class CondaS3Sync(object):
             actual_obj = self.s3_client.Object(obj.bucket_name, obj.key)
             actual_obj.download_file(export_path)
 
-            envs[env_name] = (export_path, obj.last_modified)
+            last_modified = (actual_obj.metadata.get('CondaEnvLastModified')
+                             or actual_obj.last_modified)
+
+            envs[env_name] = (export_path, last_modified)
 
         return tmp_dir, envs
 
     def sync_all(self):
-        import pdb; pdb.set_trace()
-
         local_tmp_dir = remote_tmp_dir = None
         try:
             local_tmp_dir, local_envs = self.export_conda_envs()
@@ -186,9 +187,12 @@ class CondaS3Sync(object):
                 if push:
                     key = os.path.join(
                         self.s3_path, os.path.basename(local_path))
-                    bucket.upload_file(local_path, key, ExtraArgs={'LastModified': local_mtime})
+                    metadata = {'CondaEnvLastModified': local_mtime}
+                    bucket.upload_file(local_path, key,
+                                       ExtraArgs={'Metadata': metadata})
                 elif pull:
-                    self.update_conda_env(remote_path, last_modified=remote_mtime)
+                    self.update_conda_env(remote_path,
+                                          last_modified=remote_mtime)
 
         finally:
             if local_tmp_dir:
@@ -204,18 +208,26 @@ def parse_s3_location(loc):
 
     return bucket, path
 
+
 def main():
     argp = argparse.ArgumentParser(
         description='Synchronize Anaconda environments information to S3')
-    argp.add_argument('--path-filter', default=None,
+    argp.add_argument(
+        '--path-filter',
+        default=None, metavar='REGEX',
         help='Regular expression of env paths to include')
-    argp.add_argument('--conda-bin', default='conda',
+    argp.add_argument(
+        '--conda-bin',
+        default='conda', metavar='PATH',
         help='Path to conda-binary')
-    argp.add_argument('--aws-region', default='us-east-1',
-        help='AWS region to connect to')
-    argp.add_argument('--include-root-env', action='store_true',
-        help='Include root Anaconda environment in addition to any custom envs')
-    argp.add_argument('s3_location', metavar='BUCKET[/PATH]',
+    argp.add_argument(
+        '--include-root-env',
+        action='store_true',
+        help='Include root Anaconda environment in addition to any custom '
+             'envs')
+    argp.add_argument(
+        's3_location',
+        metavar='BUCKET[/PATH]',
         help='Bucket and path of S3 location to synchronize to/from')
 
     args = argp.parse_args()
@@ -231,6 +243,7 @@ def main():
         path_filter=args.path_filter,
         include_root=args.include_root_env)
     sync.sync_all()
+
 
 if __name__ == '__main__':
     main()
