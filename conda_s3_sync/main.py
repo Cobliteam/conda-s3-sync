@@ -9,6 +9,10 @@ import shutil
 import subprocess
 import tempfile
 import time
+try:
+    from subprocess import DEVNULL
+except ImportError:
+    DEVNULL = os.devnull
 
 import boto3
 
@@ -39,7 +43,7 @@ class CondaS3Sync(object):
         if self._conda_info is None:
             out = subprocess.check_output(
                 [self.conda_bin, 'info', '-e', '--json'],
-                stdin=None)
+                stdin=DEVNULL)
 
             self._conda_info = json.loads(out)
 
@@ -63,7 +67,8 @@ class CondaS3Sync(object):
     def export_conda_env(self, env_path, export_path):
         with open(export_path, 'wb') as f:
             out = subprocess.check_output(
-                [self.conda_bin, 'env', 'export', '-p', env_path])
+                [self.conda_bin, 'env', 'export', '-p', env_path],
+                stdin=DEVNULL)
             f.write(out)
 
     def _get_env_name_for_path(self, path):
@@ -105,7 +110,7 @@ class CondaS3Sync(object):
             cmd = [self.conda_bin, 'env', 'create', '-f', export_path]
 
         cmd.extend(env_opts)
-        subprocess.check_call(cmd)
+        subprocess.check_call(cmd, stdin=DEVNULL)
 
         # Reset cache information, since we made changes to the envs
         self._conda_info = None
