@@ -15,6 +15,7 @@ except ImportError:
     DEVNULL = os.devnull
 
 import boto3
+import iso8601
 
 
 def zip_dicts_by_key(*dicts):
@@ -159,8 +160,11 @@ class CondaS3Sync(object):
             actual_obj = self.s3_client.Object(obj.bucket_name, obj.key)
             actual_obj.download_file(export_path)
 
-            last_modified = (actual_obj.metadata.get('CondaEnvLastModified')
-                             or actual_obj.last_modified)
+            last_modified = actual_obj.metadata.get('conda-env-last-modified')
+            if last_modified:
+                last_modified = iso8601.parse_date(last_modified)
+            else:
+                last_modified = actual_obj.last_modified
 
             envs[env_name] = (export_path, last_modified)
 
@@ -192,7 +196,8 @@ class CondaS3Sync(object):
                 if push:
                     key = os.path.join(
                         self.s3_path, os.path.basename(local_path))
-                    metadata = {'CondaEnvLastModified': local_mtime}
+                    mtime_s = local_mtime.isoformat('T')
+                    metadata = {'conda-env-last-modified': mtime_s}
                     bucket.upload_file(local_path, key,
                                        ExtraArgs={'Metadata': metadata})
                 elif pull:

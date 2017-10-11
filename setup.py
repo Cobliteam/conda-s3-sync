@@ -14,7 +14,8 @@ setup(
     author_email='daniel@cobli.co',
     license='MIT',
     install_requires=[
-        'boto3'
+        'boto3',
+        'iso8601'
     ],
     entry_points={
         'console_scripts': ['conda-s3-sync=conda_s3_sync.main:main']
