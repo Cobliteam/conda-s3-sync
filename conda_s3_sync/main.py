@@ -238,7 +238,7 @@ def main():
     args = argp.parse_args()
 
     bucket, path = parse_s3_location(args.s3_location)
-    s3_client = boto3.resource('s3', region_name=args.aws_region)
+    s3_client = boto3.resource('s3')
 
     sync = CondaS3Sync(
         conda_bin=args.conda_bin,
