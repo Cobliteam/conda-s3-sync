@@ -15,18 +15,15 @@ Usage
 ::
 
     positional arguments:
-      BUCKET[/PATH]         Bucket and path of S3 location to synchronize to/from
+      BUCKET[/PATH]        Bucket and path of S3 location to synchronize to/from
 
     optional arguments:
-      -h, --help            show this help message and exit
-      --path-filter PATH_FILTER
-                            Regular expression of env paths to include
-      --conda-bin CONDA_BIN
-                            Path to conda-binary
-      --aws-region AWS_REGION
-                            AWS region to connect to
-      --include-root-env    Include root Anaconda environment in addition to any
-                            custom envs
+      -h, --help           show this help message and exit
+      --path-filter REGEX  Regular expression of env paths to include
+      --conda-bin PATH     Path to conda-binary
+      --include-root-env   Include root Anaconda environment in addition to any
+                           custom envs
+
 
 AWS credentials should be set up using IAM roles, or the usual environment
 variables (such as ``AWS_ACCESS_KEY_ID``, ``AWS_SECRET_ACCESS_KEY`` and
