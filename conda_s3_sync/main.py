@@ -3,6 +3,7 @@ from __future__ import unicode_literals
 import argparse
 import datetime
 import json
+import logging
 import os.path
 import re
 import shutil
@@ -16,6 +17,9 @@ except ImportError:
 
 import boto3
 import iso8601
+
+
+logger = logging.getLogger('conda-s3-sync')
 
 
 def zip_dicts_by_key(*dicts):
@@ -42,6 +46,7 @@ class CondaS3Sync(object):
 
     def get_conda_info(self):
         if self._conda_info is None:
+            logger.info('Reloading Conda information')
             out = subprocess.check_output(
                 [self.conda_bin, 'info', '-e', '--json'],
                 stdin=DEVNULL)
@@ -60,13 +65,17 @@ class CondaS3Sync(object):
             if not self._is_env_accepted(path):
                 continue
 
-            yield os.path.basename(path), path
+            env_name = os.path.basename(path)
+            logger.debug('Found Conda env: %s at %s', env_name, path)
+            yield env_name, path
 
         if self.include_root:
+            logger.debug('Found Root env at %s', path)
             yield 'root', info['root_prefix']
 
     def export_conda_env(self, env_path, export_path):
         with open(export_path, 'wb') as f:
+            logger.debug('Exporting env %s to %s', env_path, export_path)
             out = subprocess.check_output(
                 [self.conda_bin, 'env', 'export', '-p', env_path],
                 stdin=DEVNULL)
@@ -104,10 +113,13 @@ class CondaS3Sync(object):
             env_opts = ['-p', env_path]
 
         if existing_path:
+            logger.debug('Updating env %s from %s', existing_path, export_path)
             cmd = [self.conda_bin, 'env', 'update', '-f', export_path]
             if prune:
                 cmd.append('--prune')
         else:
+            logger.debug('Creating new env %s (path: %s) from %s',
+                         env_name, env_path or '', export_path)
             cmd = [self.conda_bin, 'env', 'create', '-f', export_path]
 
         cmd.extend(env_opts)
@@ -119,6 +131,8 @@ class CondaS3Sync(object):
             env_path = self._get_env_path_for_name(env_name)
 
         if last_modified:
+            logger.debug('Updating env last-modified to %s', last_modified)
+
             history_path = os.path.join(env_path, 'conda-meta', 'history')
             mtime = time.mktime(last_modified.timetuple())
             os.utime(history_path, (mtime, mtime))
@@ -156,14 +170,20 @@ class CondaS3Sync(object):
             if not env_name:
                 continue
 
+            logger.debug('Found remote environment at path %s', obj.key)
+
             export_path = os.path.join(tmp_dir, fname)
             actual_obj = self.s3_client.Object(obj.bucket_name, obj.key)
             actual_obj.download_file(export_path)
 
             last_modified = actual_obj.metadata.get('conda-env-last-modified')
             if last_modified:
+                logger.debug('Got last-modified from metadata: %s',
+                             last_modified)
                 last_modified = iso8601.parse_date(last_modified)
             else:
+                logger.debug('Missing last-modified metadata, using S3 '
+                             'default: %s', actual_obj.last_modified)
                 last_modified = actual_obj.last_modified
 
             envs[env_name] = (export_path, last_modified)
@@ -182,6 +202,11 @@ class CondaS3Sync(object):
                 local_path, local_mtime = local or (None, None)
                 remote_path, remote_mtime = remote or (None, None)
 
+                logger.debug('Synchronizing env %s: local_path=%s, '
+                             'local_mtime=%s, remote_path=%s, remote_mtime=%s',
+                             env_name, local_path, local_mtime, remote_path,
+                             remote_mtime)
+
                 push = pull = False
                 if local and remote:
                     if local_mtime > remote_mtime:
@@ -194,6 +219,8 @@ class CondaS3Sync(object):
                     pull = True
 
                 if push:
+                    logger.debug('Pushing local venv to remote')
+
                     key = os.path.join(
                         self.s3_path, os.path.basename(local_path))
                     mtime_s = local_mtime.isoformat('T')
@@ -201,6 +228,8 @@ class CondaS3Sync(object):
                     bucket.upload_file(local_path, key,
                                        ExtraArgs={'Metadata': metadata})
                 elif pull:
+                    logger.debug('Pulling remote venv to local')
+
                     self.update_conda_env(remote_path,
                                           last_modified=remote_mtime)
 
@@ -220,6 +249,9 @@ def parse_s3_location(loc):
 
 
 def main():
+    logging.basicConfig(level=logging.WARN)
+    logger.setLevel(logging.DEBUG)
+
     argp = argparse.ArgumentParser(
         description='Synchronize Anaconda environments information to S3')
     argp.add_argument(
