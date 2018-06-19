@@ -1,4 +1,4 @@
-from __future__ import unicode_literals
+from __future__ import print_function, unicode_literals
 
 import argparse
 import datetime
@@ -8,8 +8,10 @@ import os.path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
+import yaml
 try:
     from subprocess import DEVNULL
 except ImportError:
@@ -30,6 +32,31 @@ def zip_dicts_by_key(*dicts):
     for key in keys:
         values = tuple(d.get(key) for d in dicts)
         yield key, values
+
+
+class CondaError(RuntimeError):
+    def __init__(self, message, data):
+        super(CondaError, self).__init__(message)
+        self.data = data
+
+
+class CondaDependenciesError(CondaError):
+    def __init__(self, message, data):
+        super(CondaDependenciesError, self).__init__(message, data)
+        self.bad_deps = data['bad_deps']
+
+
+def replace_conda_dependency(data, check, replace):
+    if isinstance(data, dict):
+        return dict((k, replace_conda_dependency(v, check, replace))
+                    for (k, v) in data.items())
+    elif isinstance(data, list):
+        return [replace_conda_dependency(v, check, replace)
+                for v in data]
+    elif isinstance(data, (str, bytes)) and check(data):
+        return replace
+
+    return data
 
 
 class CondaS3Sync(object):
@@ -93,6 +120,61 @@ class CondaS3Sync(object):
         return next((path for path in self.get_conda_info()['envs']
                      if os.path.basename(path) == env_name), None)
 
+    def _run_conda_provision(self, env_file, *args, env_path=None,
+                             env_name=None, prune=False, update=False):
+        cmd = [self.conda_bin, 'env', 'update' if update else 'create',
+               '--json', '-f', env_file]
+        if env_path:
+            cmd.extend(['-p', env_path])
+        if env_name and (not update or not env_path):
+            cmd.extend(['-n', env_name])
+
+        logger.debug('Running conda: %s', cmd)
+        proc = subprocess.Popen(cmd, stdin=DEVNULL, stdout=subprocess.PIPE)
+        out, _ = proc.communicate()
+        proc.wait()
+        try:
+            err_data = json.loads(out)
+        except ValueError:
+            sys.stdout.buffer.write(out)
+            err_data = None
+
+        if proc.returncode != 0:
+            if err_data and 'bad_deps' in err_data:
+                raise CondaDependenciesError('Missing dependencies', err_data)
+
+            raise CondaError('Update failed', err_data)
+
+    def _run_conda_provision_retry(self, env_file, *args, **kwargs):
+        failed_deps = set()
+        while True:
+            try:
+                self._run_conda_provision(env_file, *args, **kwargs)
+                break
+            except CondaDependenciesError as e:
+                logger.warn('Failed to install Conda environment. '
+                            'Retrying installation by cleaning up broken '
+                            'dependencies: %s', e.bad_deps)
+
+                with open(env_file, 'r+') as f:
+                    yaml_data = yaml.safe_load(f)
+                    for dep in e.bad_deps:
+                        dep_name = dep.split('=')[0]
+                        if dep_name in failed_deps:
+                            raise e
+
+                        failed_deps.add(dep_name)
+                        yaml_data = replace_conda_dependency(
+                            yaml_data, lambda s: s.startswith(dep_name + '='),
+                            dep_name)
+
+                    f.seek(0)
+                    yaml.dump(yaml_data, f)
+                    f.truncate()
+            except CondaError as e:
+                logger.exception('Conda failed: %s', e.data)
+                raise e
+
     def update_conda_env(self, export_path, base_path=None, prune=False,
                          last_modified=None):
         env_name = self._get_env_name_for_path(export_path)
@@ -100,30 +182,22 @@ class CondaS3Sync(object):
             raise ValueError('Invalid environment file, must have YAML '
                              'extension')
 
+        update = False
         existing_path = self._get_env_path_for_name(env_name)
         if not existing_path and not base_path:
             # Figure out the path later
             env_path = None
-            env_opts = ['-n', env_name]
         else:
             if existing_path:
                 env_path = existing_path
+                update = True
             else:
                 env_path = os.path.join(base_path, env_name)
-            env_opts = ['-p', env_path]
+                update = os.path.exists(env_path)
 
-        if existing_path:
-            logger.debug('Updating env %s from %s', existing_path, export_path)
-            cmd = [self.conda_bin, 'env', 'update', '-f', export_path]
-            if prune:
-                cmd.append('--prune')
-        else:
-            logger.debug('Creating new env %s (path: %s) from %s',
-                         env_name, env_path or '', export_path)
-            cmd = [self.conda_bin, 'env', 'create', '-f', export_path]
-
-        cmd.extend(env_opts)
-        subprocess.check_call(cmd, stdin=DEVNULL)
+        self._run_conda_provision_retry(
+            export_path, env_path=env_path, env_name=env_name, prune=prune,
+            update=existing_path is not None)
 
         # Reset cache information, since we made changes to the envs
         self._conda_info = None

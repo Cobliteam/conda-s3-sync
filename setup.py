@@ -15,7 +15,8 @@ setup(
     license='MIT',
     install_requires=[
         'boto3',
-        'iso8601'
+        'iso8601',
+        'pyyaml'
     ],
     entry_points={
         'console_scripts': ['conda-s3-sync=conda_s3_sync.main:main']
